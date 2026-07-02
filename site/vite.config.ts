@@ -5,6 +5,7 @@ import { defineConfig } from "vite";
 import tsConfigPaths from "vite-tsconfig-paths";
 
 export default defineConfig({
+  base: process.env.GITHUB_PAGES ? "/Review-Pilot/" : "/",
   server: {
     port: 3000,
     host: true,

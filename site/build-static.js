@@ -10,7 +10,11 @@ async function main() {
 
   // 1. Build the production application
   console.log("[Static Build] Running npm run build...");
-  execSync("npm run build", { cwd: __dirname, stdio: "inherit" });
+  execSync("npm run build", {
+    cwd: __dirname,
+    stdio: "inherit",
+    env: { ...process.env, GITHUB_PAGES: "true" }
+  });
 
   // 2. Spawn the SSR server on temporary port 3005
   console.log("[Static Build] Spawning production server temporarily...");
@@ -26,13 +30,17 @@ async function main() {
       const url = new URL(req.url, 'http://localhost:3005');
       const pathname = url.pathname;
 
-      // Serve static assets first
-      if (pathname.startsWith('/assets/')) {
-        const filePath = join('./dist/client', pathname);
+      // Serve static assets first (handling optional subpath prefix)
+      let cleanPath = pathname;
+      if (cleanPath.startsWith('/Review-Pilot/')) {
+        cleanPath = cleanPath.replace('/Review-Pilot/', '/');
+      }
+      if (cleanPath.startsWith('/assets/')) {
+        const filePath = join('./dist/client', cleanPath);
         if (existsSync(filePath)) {
           const content = readFileSync(filePath);
-          if (pathname.endsWith('.css')) res.setHeader('Content-Type', 'text/css');
-          if (pathname.endsWith('.js')) res.setHeader('Content-Type', 'application/javascript');
+          if (cleanPath.endsWith('.css')) res.setHeader('Content-Type', 'text/css');
+          if (cleanPath.endsWith('.js')) res.setHeader('Content-Type', 'application/javascript');
           res.end(content);
           return;
         }
@@ -89,10 +97,11 @@ async function main() {
 
   // 3. Crawl routes and save HTML
   console.log("[Static Build] Crawling SSR pages...");
+  const basePath = process.env.GITHUB_PAGES ? "/Review-Pilot" : "";
   for (const r of routes) {
     try {
-      console.log(`[Static Build] Crawling ${r.path} -> dist/static/${r.file}`);
-      const res = await fetch(`http://127.0.0.1:3005${r.path}?static=true`);
+      console.log(`[Static Build] Crawling ${basePath}${r.path} -> dist/static/${r.file}`);
+      const res = await fetch(`http://127.0.0.1:3005${basePath}${r.path}?static=true`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       let html = await res.text();
 
@@ -111,7 +120,7 @@ async function main() {
 
   // Create a 404.html to redirect all SPA requests back to index.html on GitHub Pages
   try {
-    const indexHtml = await (await fetch("http://127.0.0.1:3005/?static=true")).text();
+    const indexHtml = await (await fetch(`http://127.0.0.1:3005${basePath}/?static=true`)).text();
     writeFileSync(join(staticDir, "404.html"), indexHtml);
     console.log("[Static Build] Created 404.html for SPA routing fallback");
   } catch (err) {
