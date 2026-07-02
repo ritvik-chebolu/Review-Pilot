@@ -1,0 +1,15 @@
+{
+  "name": "reviewpilot-review-engine",
+  "version": "1.0.0",
+  "description": "AI-powered review response generation engine for ReviewPilot",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "test": "node --test test/",
+    "demo": "node demo.js"
+  },
+  "dependencies": {
+    "openai": "^4.52.0",
+    "@anthropic-ai/sdk": "^0.27.0"
+  }
+}
