@@ -1,0 +1,40 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main # Trigger deployment on pushes to main branch
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-deploy:
+    concurrency: ci-${{ github.ref }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: site/package-lock.json
+
+      - name: Install Dependencies
+        run: |
+          cd site
+          npm ci
+
+      - name: Build Static Site
+        run: |
+          cd site
+          npm run build:static
+
+      - name: Deploy to GitHub Pages
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: site/dist/static # The directory containing our pre-rendered static HTML files
+          branch: gh-pages # The branch the action will deploy to
