@@ -1,12 +1,15 @@
 import { serverLogin, serverSignup, serverGetMe } from "./server/auth-fns";
 import { getBusiness, upsertBusiness } from "./server/business-fns";
 import { getReviews, updateReviewResponse, saveReviewDraft, rejectReviewResponse } from "./server/review-fns";
+import { getConnectedAccounts, upsertConnectedAccount, disconnectAccount } from "./server/accounts-fns";
+import { getPreferences, updatePreferences } from "./server/preferences-fns";
+import { sendPasswordReset, resetPassword } from "./server/password-reset-fns";
+import { getGoogleOAuthUrl, exchangeGoogleCode } from "./server/oauth-fns";
 
 export function isStaticMode(): boolean {
   if (typeof window === "undefined") return false;
   return (
     window.location.hostname.endsWith("github.io") ||
-    window.location.hostname.includes("localhost") === false && window.location.port !== "3000" ||
     window.location.search.includes("static=true")
   );
 }
@@ -261,6 +264,197 @@ export async function clientRejectReviewResponse(reviewId: string, userId: strin
   }
   try {
     return await rejectReviewResponse({ data: { reviewId, userId } });
+  } catch {
+    return { ok: false, error: "Database offline" };
+  }
+}
+
+// ─── Connected Accounts ───────────────────────────────────────────────────────
+
+const ACCOUNTS_DB_KEY = "rp_emulator_accounts";
+
+export async function clientGetConnectedAccounts(businessId: string) {
+  if (isStaticMode()) {
+    const accounts = getLocalData<any[]>(ACCOUNTS_DB_KEY, []);
+    return accounts.filter((a) => a.business_id === businessId);
+  }
+  try {
+    return await getConnectedAccounts({ data: { businessId } });
+  } catch {
+    return [];
+  }
+}
+
+export async function clientUpsertConnectedAccount(data: {
+  businessId: string;
+  platform: "google" | "yelp";
+  platformBusinessId: string;
+  authToken?: string;
+}) {
+  if (isStaticMode()) {
+    const accounts = getLocalData<any[]>(ACCOUNTS_DB_KEY, []);
+    const idx = accounts.findIndex(
+      (a) => a.business_id === data.businessId && a.platform === data.platform
+    );
+    if (idx !== -1) {
+      accounts[idx] = { ...accounts[idx], ...data, is_active: 1, platform_business_id: data.platformBusinessId };
+    } else {
+      accounts.push({
+        id: `emu_acc_${Date.now()}`,
+        business_id: data.businessId,
+        platform: data.platform,
+        platform_business_id: data.platformBusinessId,
+        auth_token: data.authToken || "",
+        is_active: 1,
+        created_at: new Date().toISOString(),
+      });
+    }
+    setLocalData(ACCOUNTS_DB_KEY, accounts);
+    return { ok: true };
+  }
+  try {
+    return await upsertConnectedAccount({ data: {
+      businessId: data.businessId,
+      platform: data.platform,
+      platformBusinessId: data.platformBusinessId,
+      authToken: data.authToken,
+    } });
+  } catch {
+    return { ok: false, error: "Database offline" };
+  }
+}
+
+export async function clientDisconnectAccount(accountId: string, businessId: string) {
+  if (isStaticMode()) {
+    const accounts = getLocalData<any[]>(ACCOUNTS_DB_KEY, []);
+    const idx = accounts.findIndex((a) => a.id === accountId);
+    if (idx !== -1) {
+      accounts[idx].is_active = 0;
+      setLocalData(ACCOUNTS_DB_KEY, accounts);
+    }
+    return { ok: true };
+  }
+  try {
+    return await disconnectAccount({ data: { accountId, businessId } });
+  } catch {
+    return { ok: false, error: "Database offline" };
+  }
+}
+
+// ─── Preferences ─────────────────────────────────────────────────────────────
+
+const PREFS_DB_KEY = "rp_emulator_preferences";
+
+export async function clientGetPreferences(userId: string) {
+  if (isStaticMode()) {
+    const prefs = getLocalData<any>(PREFS_DB_KEY, null);
+    if (!prefs || prefs.user_id !== userId) {
+      return {
+        user_id: userId,
+        email_alerts: 1,
+        daily_digest: 1,
+        weekly_summary: 1,
+        sms_alerts: 0,
+        sms_phone: "",
+      };
+    }
+    return prefs;
+  }
+  try {
+    return await getPreferences({ data: { userId } });
+  } catch {
+    return {
+      user_id: userId,
+      email_alerts: 1,
+      daily_digest: 1,
+      weekly_summary: 1,
+      sms_alerts: 0,
+      sms_phone: "",
+    };
+  }
+}
+
+export async function clientUpdatePreferences(data: {
+  userId: string;
+  emailAlerts: boolean;
+  dailyDigest: boolean;
+  weeklySummary: boolean;
+  smsAlerts: boolean;
+  smsPhone: string;
+}) {
+  if (isStaticMode()) {
+    const prefs = {
+      user_id: data.userId,
+      email_alerts: data.emailAlerts ? 1 : 0,
+      daily_digest: data.dailyDigest ? 1 : 0,
+      weekly_summary: data.weeklySummary ? 1 : 0,
+      sms_alerts: data.smsAlerts ? 1 : 0,
+      sms_phone: data.smsPhone,
+    };
+    setLocalData(PREFS_DB_KEY, prefs);
+    return { ok: true };
+  }
+  try {
+    return await updatePreferences({ data });
+  } catch {
+    return { ok: false, error: "Database offline" };
+  }
+}
+
+// ─── Password Reset ──────────────────────────────────────────────────────────
+
+export async function clientSendPasswordReset(email: string) {
+  if (isStaticMode()) {
+    console.log(`[Emulator] Password reset link for ${email}: http://localhost:3000/reset-password?token=emu_token_${Date.now()}`);
+    return { ok: true, message: "If an account with that email exists, a reset link has been sent." };
+  }
+  try {
+    return await sendPasswordReset({ data: { email } });
+  } catch {
+    return { ok: false, error: "Database offline" };
+  }
+}
+
+export async function clientResetPassword(token: string, newPassword: string) {
+  if (isStaticMode()) {
+    return { ok: true };
+  }
+  try {
+    return await resetPassword({ data: { token, newPassword } });
+  } catch {
+    return { ok: false, error: "Database offline" };
+  }
+}
+
+// ─── Google OAuth ────────────────────────────────────────────────────────────
+
+export async function clientGetGoogleOAuthUrl(businessId: string) {
+  if (isStaticMode()) {
+    return {
+      ok: true,
+      url: `http://localhost:3000/dashboard/settings?code=mock_oauth_code_123&state=google`,
+    };
+  }
+  try {
+    return await getGoogleOAuthUrl({ data: { businessId } });
+  } catch {
+    return { ok: false, error: "Database offline", url: null };
+  }
+}
+
+export async function clientExchangeGoogleCode(code: string, businessId: string) {
+  if (isStaticMode()) {
+    // Save a mock connected account
+    const result = await clientUpsertConnectedAccount({
+      businessId,
+      platform: "google",
+      platformBusinessId: "accounts/mock-account/locations/mock-location",
+      authToken: `mock_access_token_${Date.now()}`,
+    });
+    return { ok: result.ok };
+  }
+  try {
+    return await exchangeGoogleCode({ data: { code, businessId } });
   } catch {
     return { ok: false, error: "Database offline" };
   }

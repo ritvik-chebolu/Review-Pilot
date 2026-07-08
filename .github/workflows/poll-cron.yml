@@ -1,0 +1,20 @@
+name: Poll Reviews (Cron)
+
+on:
+  schedule:
+    # Every 30 minutes
+    - cron: '*/30 * * * *'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger poll endpoint
+        run: |
+          curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -d '{"secret":"${{ secrets.POLL_SECRET }}"}' \
+            "${{ secrets.APP_URL }}/api/poll" \
+            --max-time 60 \
+            --fail || echo "Poll request failed (app may be sleeping on free tier)"

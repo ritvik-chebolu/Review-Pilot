@@ -52,23 +52,38 @@ export const getReviews = createServerFn({ method: "GET" })
 
 export const updateReviewResponse = createServerFn({ method: "POST" })
   .validator((d: unknown) => d as { reviewId: string; responseText: string; userId: string })
-  .handler(async ({ data }): Promise<{ ok: boolean; error?: string }> => {
+  .handler(async ({ data }): Promise<{ ok: boolean; error?: string; gbpResult?: { posted: boolean; message?: string } }> => {
     const escapedReviewId = JSON.stringify(data.reviewId);
     const escapedResponseText = JSON.stringify(data.responseText);
     const escapedUserId = JSON.stringify(data.userId);
 
     // Verify the review belongs to this user
     const reviewCheck = teamDbExec(
-      `SELECT r.id FROM reviews r JOIN businesses b ON r.business_id = b.id WHERE r.id = ${escapedReviewId} AND b.user_id = ${escapedUserId}`
-    ) as { id: string }[];
+      `SELECT r.id, r.platform FROM reviews r JOIN businesses b ON r.business_id = b.id WHERE r.id = ${escapedReviewId} AND b.user_id = ${escapedUserId}`
+    ) as { id: string; platform: string }[];
     if (!reviewCheck || reviewCheck.length === 0) {
       return { ok: false, error: "Review not found or access denied" };
     }
 
+    // Save to DB
     teamDbExec(
       `UPDATE reviews SET response_text = ${escapedResponseText}, responded_at = datetime('now') WHERE id = ${escapedReviewId}`
     );
-    return { ok: true };
+
+    // Attempt to post reply to GBP if it's a Google review
+    let gbpResult = { posted: false, message: "Saved as draft." };
+    if (reviewCheck[0].platform === "google") {
+      try {
+        const { postGbpReply } = await import("./gbp-reply");
+        const result = await postGbpReply({ data: { reviewId: data.reviewId, responseText: data.responseText, userId: data.userId } });
+        gbpResult = { posted: result.posted, message: result.message };
+      } catch (err) {
+        console.warn("[ReviewFns] GBP reply post failed (non-critical):", (err as Error).message);
+        gbpResult = { posted: false, message: "Response saved. GBP posting unavailable." };
+      }
+    }
+
+    return { ok: true, gbpResult };
   });
 
 export const getBusinesses = createServerFn({ method: "GET" })

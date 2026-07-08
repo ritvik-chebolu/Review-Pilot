@@ -38,6 +38,15 @@ export const serverSignup = createServerFn({ method: "POST" })
     const pwHash = await hashPassword(password);
     createUser(id, email, name.trim(), pwHash);
 
+    // Auto-create starter subscription
+    const subId = uuidv4();
+    const now = new Date().toISOString();
+    const oneMonthLater = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    teamDbExec(
+      `INSERT INTO subscriptions (id, user_id, plan, status, current_period_start, current_period_end)
+       VALUES ('${subId}', '${id}', 'starter', 'active', '${now}', '${oneMonthLater}')`
+    );
+
     const user = findUserByEmail(email);
     if (!user) {
       return { ok: false, error: "Failed to create user" };

@@ -7,7 +7,8 @@
     "dev": "vite dev",
     "build": "vite build",
     "build:static": "node build-static.js",
-    "start": "bun run serve.ts",
+    "start": "node server.js",
+    "serve:bun": "bun run serve.ts",
     "publish": "bash ./publish.sh",
     "format": "prettier --write ."
   },

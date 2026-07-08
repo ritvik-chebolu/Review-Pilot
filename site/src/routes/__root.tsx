@@ -38,7 +38,16 @@ export const Route = createRootRoute({
       },
     ],
   }),
-  notFoundComponent: () => <div>Page not found</div>,
+  notFoundComponent: () => (
+    <div className="flex min-h-dvh items-center justify-center bg-[#0b0d11] text-center">
+      <div>
+        <div className="text-6xl font-extrabold gradient-text">404</div>
+        <p className="mt-4 text-lg font-semibold text-white">Page not found</p>
+        <p className="mt-2 text-sm text-slate-500">The page you're looking for doesn't exist.</p>
+        <a href="/" className="btn-primary mt-6 inline-flex items-center gap-2">Go home</a>
+      </div>
+    </div>
+  ),
   component: RootComponent,
 });
 

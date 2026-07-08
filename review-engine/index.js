@@ -2,8 +2,11 @@
  * index.js — ReviewPilot AI Review Response Engine
  *
  * The main entry point. Provides a unified `generateResponse()` function
- * that automatically routes to the right AI provider and prompt variant
- * based on the review's rating and business context.
+ * that automatically routes to the right provider:
+ *
+ *   1. Template engine (default — no API key required!)
+ *   2. DeepSeek API (if DEEPSEEK_API_KEY is set — free tier available)
+ *   3. OpenAI API (if OPENAI_API_KEY is set — costs money)
  *
  * Usage:
  *   import { generateResponse } from './index.js';
@@ -14,51 +17,42 @@
  *   });
  *
  *   console.log(result.response);
- *
- * Environment variables required (see .env.example):
- *   OPENAI_API_KEY            — needed for primary (OpenAI) provider
- *   ANTHROPIC_API_KEY         — needed for Claude fallback
- *   AI_PRIMARY_PROVIDER       — 'openai' (default) or 'claude'
- *   AI_DEBUG                  — 'true' to log prompts/responses
  */
 
 import { config } from './config.js';
 import { buildMessages, classifySentiment } from './lib/prompts.js';
-import { generateReply as openaiGenerate } from './lib/openai.js';
-import { generateReply as claudeGenerate } from './lib/claude.js';
+import { generateTemplateResponse } from './lib/templates.js';
+
+// Lazy-import API providers only when needed
+let openaiGenerate = null;
+async function getApiGenerator() {
+  if (!openaiGenerate) {
+    const mod = await import('./lib/openai.js');
+    openaiGenerate = mod.generateReply;
+  }
+  return openaiGenerate;
+}
 
 // ─── Main Public API ─────────────────────────────────────────────────────────
 
 /**
- * Generate a personalized review response using the configured AI provider.
+ * Generate a personalized review response.
  *
  * @param {object} params
- * @param {object} params.review - The review details
+ * @param {object} params.review
  * @param {number} params.review.rating - Star rating (1-5)
  * @param {string} params.review.comment - Review text
  * @param {string} [params.review.reviewerName] - Reviewer's display name
  * @param {string} [params.review.reviewDate] - Date of the review
- * @param {object} params.business - Business context
- * @param {string} params.business.name - Business name (e.g., "Downtown Dental")
- * @param {string} params.business.type - Business type (e.g., "dental clinic")
- * @param {string} [params.business.brandVoice] - Tone: "professional", "warm", "casual", etc.
- * @param {'first-person'|'we'|'business-name'} [params.business.signatureStyle] - How to sign
- * @param {string} [params.business.customInstructions] - Free-text additional rules
- * @param {string[]} [params.business.avoidTopics] - Topics to avoid mentioning
- * @param {number} [params.business.totalReviewCount] - For context
- * @param {number} [params.business.averageRating] - For context
- * @param {object} [params.options] - Override provider settings
- * @param {'openai'|'claude'} [params.options.provider] - Force a specific provider
- * @param {number} [params.options.temperature]
- * @param {number} [params.options.maxTokens]
+ * @param {object} params.business
+ * @param {string} params.business.name - Business name
+ * @param {string} params.business.type - Business type
+ * @param {string} [params.business.brandVoice] - Tone
+ * @param {'first-person'|'we'|'business-name'} [params.business.signatureStyle]
+ * @param {string} [params.business.customInstructions]
+ * @param {object} [params.options]
+ * @param {'template'|'deepseek'|'openai'} [params.options.provider]
  * @returns {Promise<GenerateResult>}
- *
- * @typedef {object} GenerateResult
- * @property {string} response - The generated response text
- * @property {'positive'|'neutral'|'negative'} sentiment - Classified sentiment
- * @property {string} provider - Which provider was used ('openai' | 'claude')
- * @property {string} model - Which model was used
- * @property {object|null} usage - Token usage and cost estimate
  */
 export async function generateResponse(params) {
   const { review, business, options = {} } = params;
@@ -71,59 +65,87 @@ export async function generateResponse(params) {
     throw new Error('Invalid business: name and type are required');
   }
 
-  // Build the messages array with the appropriate prompt variant
-  const { messages, sentiment } = buildMessages(business, review);
-
-  // Determine which provider to use
+  const sentiment = classifySentiment(review.rating);
   const useProvider = options.provider || config.primaryProvider;
-  const isFallback = useProvider !== config.primaryProvider;
 
-  // Decide temperature — use slightly lower for negative reviews (more careful)
-  const baseTemperature = isFallback
-    ? options.temperature || config.claude.temperature
-    : options.temperature || config.openai.temperature;
+  // ── Template provider (no API key needed) ──────────────────────────────
+  if (useProvider === 'template') {
+    const templateResult = generateTemplateResponse({
+      review: {
+        rating: review.rating,
+        comment: review.comment,
+        reviewerName: review.reviewerName,
+      },
+      business: {
+        name: business.name,
+        type: business.type,
+        brandVoice: business.brandVoice,
+        signatureStyle: business.signatureStyle,
+      },
+    });
 
-  // Choose provider
-  const provider = useProvider === 'claude' ? 'claude' : 'openai';
-
-  // For negative reviews when using OpenAI, consider Claude as a higher-quality fallback
-  // Only if primary is OpenAI, sentiment is negative, and no provider was forced
-  const useClaudeFallback =
-    provider === 'openai' &&
-    sentiment === 'negative' &&
-    !options.provider &&
-    process.env.ANTHROPIC_API_KEY;
-
-  const finalProvider = useClaudeFallback ? 'claude' : provider;
-
-  let result;
-  if (finalProvider === 'claude') {
-    const modelOptions = {
-      temperature: options.temperature || config.claude.temperature,
-      maxTokens: options.maxTokens || config.claude.maxTokens,
-      model: config.claude.model,
+    return {
+      response: templateResult.response,
+      sentiment: templateResult.sentiment,
+      provider: 'template',
+      model: 'template-v1',
+      usage: null,
+      usedFallback: false,
     };
-    result = await claudeGenerate(messages, modelOptions);
-  } else {
-    const modelOptions = {
-      temperature: baseTemperature,
-      maxTokens: options.maxTokens || config.openai.maxTokens,
-      model: config.openai.model,
-    };
-    result = await openaiGenerate(messages, modelOptions);
   }
 
-  return {
-    response: result.response,
-    sentiment,
-    provider: finalProvider,
-    model: result.model,
-    usage: result.usage,
-    usedFallback: useClaudeFallback,
-  };
+  // ── API-based provider (DeepSeek or OpenAI) ────────────────────────────
+  try {
+    const generate = await getApiGenerator();
+    const { messages } = buildMessages(business, review);
+
+    const providerConfig = useProvider === 'deepseek' ? config.deepseek : config.openai;
+
+    const result = await generate(messages, {
+      temperature: options.temperature || providerConfig.temperature,
+      maxTokens: options.maxTokens || providerConfig.maxTokens,
+      model: providerConfig.model,
+    });
+
+    return {
+      response: result.response,
+      sentiment,
+      provider: useProvider,
+      model: result.model,
+      usage: result.usage,
+      usedFallback: false,
+    };
+  } catch (err) {
+    // If API fails, fall back to template engine
+    console.warn(`[ReviewEngine] ${useProvider} API failed, falling back to templates:`, err.message);
+
+    const templateResult = generateTemplateResponse({
+      review: {
+        rating: review.rating,
+        comment: review.comment,
+        reviewerName: review.reviewerName,
+      },
+      business: {
+        name: business.name,
+        type: business.type,
+        brandVoice: business.brandVoice,
+        signatureStyle: business.signatureStyle,
+      },
+    });
+
+    return {
+      response: templateResult.response,
+      sentiment: templateResult.sentiment,
+      provider: 'template',
+      model: 'template-v1 (fallback)',
+      usage: null,
+      usedFallback: true,
+    };
+  }
 }
 
 // ─── Convenience Exports ─────────────────────────────────────────────────────
 
 export { classifySentiment, buildMessages } from './lib/prompts.js';
+export { generateTemplateResponse } from './lib/templates.js';
 export { config } from './config.js';
